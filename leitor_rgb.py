@@ -1,202 +1,107 @@
-import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
 import serial
-import serial.tools.list_ports
+import tkinter as tk
+from tkinter import messagebox, ttk
+import threading
 import time
-import json
-import os
-from tkinter.colorchooser import askcolor
+import serial.tools.list_ports
 
-CONFIG_FILE = "config_cores.json"
-
-def carregar_configuracoes():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as file:
-            return json.load(file)
-    return {}
-
-def salvar_configuracoes(config):
-    with open(CONFIG_FILE, "w") as file:
-        json.dump(config, file, indent=4)
-
+# Função para listar as portas seriais disponíveis no PC
 def listar_portas():
-    return [comport.device for comport in serial.tools.list_ports.comports()]
+    portas = [comport.device for comport in serial.tools.list_ports.comports()]
+    return portas
 
-def ler_cor():
+# Função que será executada quando o botão "Ler" for pressionado
+def ler_dados():
+    porta_serial = combo_porta.get()  # Obtém a porta serial selecionada
     try:
-        porta_com = porta_com_var.get()
-        if porta_com:
-            arduino = serial.Serial(porta_com, 9600, timeout=1)
-            time.sleep(2)
-            arduino.write(b"START")
-            time.sleep(1)
-            dados = arduino.readline().decode("utf-8").strip()
-            if dados:
-                r, g, b = map(int, dados.split(","))
-                atualizar_interface(r, g, b)
-            else:
-                messagebox.showerror("Erro", "Não foi possível ler os dados do sensor.")
-            arduino.close()
+        # Configura a conexão serial
+        ser = serial.Serial(porta_serial, 9600)
+        time.sleep(2)  # Espera a conexão estabilizar
+
+        # Lê os dados e exibe na interface
+        dados = ser.readline().decode('utf-8').strip()
+        valores = dados.split(';')
+
+        if len(valores) == 3:  # Verifica se os dados estão no formato RGB
+            r, g, b = map(int, valores)  # Converte os valores para inteiros
+            resultado_label.config(text=f"R: {r} | G: {g} | B: {b}")
+            # Atualiza a cor de fundo com o valor RGB
+            cor_canvas.config(bg=f'#{r:02x}{g:02x}{b:02x}')
         else:
-            messagebox.showwarning("Aviso", "Selecione uma porta COM válida.")
+            messagebox.showerror("Erro", "Dados no formato incorreto.")
+        
+        ser.close()  # Fecha a conexão serial
+
     except Exception as e:
-        messagebox.showerror("Erro", f"Erro ao ler a cor: {e}")
+        messagebox.showerror("Erro", f"Não foi possível se conectar à porta: {e}")
 
-def atualizar_interface(r, g, b):
-    color = f"#{r:02x}{g:02x}{b:02x}"
-    frame_cor.config(bg=color)
-    label_rgb.config(text=f"RGB: ({r}, {g}, {b})")
-    
-    nome_cor = cor_mais_proxima(r, g, b)
-    label_nome_cor.config(text=f"Cor: {nome_cor}")
-    
-    atualizar_paleta(r, g, b)
+# Função para iniciar a leitura em uma thread separada
+def iniciar_leitura():
+    # Desabilita o botão enquanto o processo está em andamento
+    ler_button.config(state=tk.DISABLED)
+    # Cria uma thread para evitar que a interface congele
+    threading.Thread(target=ler_dados).start()
+    # Reabilita o botão após 3 segundos
+    time.sleep(3)
+    ler_button.config(state=tk.NORMAL)
 
-def cor_mais_proxima(r, g, b):
-    config = carregar_configuracoes()
-    cores_salvas = config.get("cores", [])
-    if not cores_salvas:
-        return "Nenhuma cor salva"
-    melhor_cor = min(cores_salvas, key=lambda cor: (r - cor["r"])**2 + (g - cor["g"])**2 + (b - cor["b"])**2)
-    return melhor_cor["nome"]
-
-def atualizar_paleta(r, g, b):
-    config = carregar_configuracoes()
-    cores_salvas = config.get("cores", [])
-    
-    for i, cor in enumerate(cores_salvas):
-        color = f"#{cor['r']:02x}{cor['g']:02x}{cor['b']:02x}"
-        cor_quadros[i].config(bg=color)
-        if cor["r"] == r and cor["g"] == g and cor["b"] == b:
-            cor_quadros[i].config(borderwidth=3, relief="solid", bg="white")
-        else:
-            cor_quadros[i].config(borderwidth=0, relief="flat")
-
-def abrir_configuracoes():
-    config_window = tk.Toplevel(root)
-    config_window.title("Configurações de Cores")
-    config_window.geometry("400x300")
-    config_window.configure(bg="#2c1e16")
-    
-    def adicionar_cor():
-        cor_rgb, cor_hex = askcolor()
-        if cor_rgb:
-            nome = simpledialog.askstring("Nome da Cor", "Digite um nome para a cor:")
-            if nome:
-                config = carregar_configuracoes()
-                if "cores" not in config:
-                    config["cores"] = []
-                config["cores"].append({
-                    "nome": nome, 
-                    "r": int(cor_rgb[0]), 
-                    "g": int(cor_rgb[1]), 
-                    "b": int(cor_rgb[2])
-                })
-                salvar_configuracoes(config)
-                atualizar_lista_cores()
-                atualizar_paleta_de_cores()
-    
-    def remover_cor():
-        selecionado = lista_cores.selection()
-        if selecionado:
-            item = lista_cores.item(selecionado)
-            nome_cor = item["values"][0]
-            config = carregar_configuracoes()
-            config["cores"] = [cor for cor in config["cores"] if cor["nome"] != nome_cor]
-            salvar_configuracoes(config)
-            atualizar_lista_cores()
-            atualizar_paleta_de_cores()
-    
-    frame_lista = tk.Frame(config_window)
-    frame_lista.pack(pady=10)
-    
-    lista_cores = ttk.Treeview(frame_lista, columns=("Nome", "RGB"), show="headings")
-    lista_cores.heading("Nome", text="Nome")
-    lista_cores.heading("RGB", text="RGB")
-    lista_cores.pack()
-    
-    def atualizar_lista_cores():
-        lista_cores.delete(*lista_cores.get_children())
-        config = carregar_configuracoes()
-        for cor in config.get("cores", []):
-            lista_cores.insert("", "end", values=(cor["nome"], f"({cor['r']}, {cor['g']}, {cor['b']})"))
-    
-    atualizar_lista_cores()
-    
-    btn_adicionar = tk.Button(config_window, text="Adicionar Cor", command=adicionar_cor, bg="#6e4b3d", fg="white", font=("Helvetica", 12))
-    btn_adicionar.pack(pady=5)
-    
-    btn_remover = tk.Button(config_window, text="Remover Selecionada", command=remover_cor, bg="#6e4b3d", fg="white", font=("Helvetica", 12))
-    btn_remover.pack(pady=5)
-
-def exibir_sobre():
-    messagebox.showinfo("Sobre", "Ferramenta para leitura de cores de torras de café.\nAutor: Rafael Amorim Faleiros\nCafé Herdeiros")
-
-# Configuração da janela principal
+# Configuração da janela principal do Tkinter
 root = tk.Tk()
-root.title("Leitor de Cores - Café Herdeiros")
-root.geometry("600x500")
-root.configure(bg="#2c1e16")
+root.title("Leitor RGB para Torras de Café")
+root.geometry("450x500")
+root.configure(bg="#2c1e16")  # Fundo com cor de café escuro
 
-# Estilos
-estilo_titulo = {"font": ("Helvetica", 16, "bold"), "bg": "#2c1e16", "fg": "#d4a373"}
-estilo_botao = {"font": ("Helvetica", 12), "bg": "#6e4b3d", "fg": "white", "width": 20}
+# Estilo da interface
+estilo_padrao = {"font": ("Helvetica", 12), "bg": "#2c1e16", "fg": "#f3e5ab"}
+estilo_titulo = {"font": ("Helvetica", 14, "bold"), "bg": "#2c1e16", "fg": "#d4a373"}
 
-# Título
-titulo_label = tk.Label(root, text="Leitor de Cores", **estilo_titulo)
+# Título do aplicativo
+titulo_label = tk.Label(root, text="Leitor RGB para Torras de Café", **estilo_titulo)
 titulo_label.pack(pady=10)
 
-# Menu de portas COM
-porta_com_label = tk.Label(root, text="Selecione a porta COM:", bg="#2c1e16", fg="white", font=("Helvetica", 12))
-porta_com_label.pack(pady=5)
+# Nome da fazenda
+fazenda_label = tk.Label(root, text="Fazenda: Café Herdeiros", font=("Helvetica", 12, "italic"), bg="#2c1e16", fg="#f3e5ab")
+fazenda_label.pack(pady=5)
 
-# Lista de portas COM
-porta_com_var = tk.StringVar(value=listar_portas()[0] if listar_portas() else "Nenhuma")
-porta_com_menu = ttk.Combobox(root, textvariable=porta_com_var, values=listar_portas(), width=20)
-porta_com_menu.pack(pady=10)
+# Texto de instrução
+instrucoes_label = tk.Label(root, text="Selecione a porta serial e clique em 'Ler'.", **estilo_padrao)
+instrucoes_label.pack(pady=5)
 
-# Botão "Ler"
-ler_botao = tk.Button(root, text="Ler Cor", command=ler_cor, **estilo_botao)
-ler_botao.pack(pady=10)
+# ComboBox para selecionar a porta serial
+combo_porta = ttk.Combobox(root, values=listar_portas(), width=30)
+combo_porta.set("Selecione a porta...")
+combo_porta.pack(pady=10)
 
-# Exibição da cor e valores RGB
-frame_cor = tk.Frame(root, width=200, height=100, bg="gray")
-frame_cor.pack(pady=10)
+# Botão para iniciar a leitura
+ler_button = tk.Button(
+    root,
+    text="Ler",
+    width=20,
+    height=2,
+    bg="#d4a373",
+    fg="#2c1e16",
+    font=("Helvetica", 12, "bold"),
+    relief="raised",
+    bd=3,
+    command=iniciar_leitura
+)
+ler_button.pack(pady=10)
 
-label_rgb = tk.Label(root, text="RGB: (0, 0, 0)", bg="#2c1e16", fg="white", font=("Helvetica", 12))
-label_rgb.pack()
+# Label para exibir os resultados RGB
+resultado_label = tk.Label(root, text="Os valores RGB aparecerão aqui.", **estilo_padrao)
+resultado_label.pack(pady=10)
 
-label_nome_cor = tk.Label(root, text="Cor: Indefinida", bg="#2c1e16", fg="white", font=("Helvetica", 12))
-label_nome_cor.pack()
+# Moldura para exibir a cor (branca)
+frame_cor = tk.Frame(root, bg="#ffffff", width=200, height=100, relief="raised", bd=2)
+frame_cor.pack(pady=20)
 
-# Paleta de Cores
-frame_paleta = tk.Frame(root, bg="#2c1e16")
-frame_paleta.pack(side="right", padx=10, pady=10)
+# Canvas para exibir a cor RGB dentro da moldura
+cor_canvas = tk.Canvas(frame_cor, width=190, height=90, bg="#000000", highlightthickness=0)
+cor_canvas.pack(padx=5, pady=5)
 
-cor_quadros = []
+# Rótulo com o nome do autor
+autor_label = tk.Label(root, text="Autor: Rafael Amorim Faleiros", font=("Helvetica", 8), bg="#2c1e16", fg="#a67c52")
+autor_label.pack(side=tk.BOTTOM, pady=5)
 
-def atualizar_paleta_de_cores():
-    config = carregar_configuracoes()
-    cores_salvas = config.get("cores", [])
-    
-    for widget in frame_paleta.winfo_children():
-        widget.destroy()
-    
-    for cor in cores_salvas:
-        cor_hex = f"#{cor['r']:02x}{cor['g']:02x}{cor['b']:02x}"  # Convertendo RGB para Hex
-        cor_label = tk.Label(frame_paleta, width=5, height=2, bg=cor_hex)
-        cor_label.pack(pady=5, padx=5)
-        cor_quadros.append(cor_label)
-
-atualizar_paleta_de_cores()
-
-# Botão "Configurações"
-config_botao = tk.Button(root, text="Configurações", command=abrir_configuracoes, **estilo_botao)
-config_botao.pack(pady=10)
-
-# Botão "Sobre"
-sobre_botao = tk.Button(root, text="Sobre", command=exibir_sobre, **estilo_botao)
-sobre_botao.pack(pady=10)
-
-# Iniciar a interface
+# Inicia a interface gráfica
 root.mainloop()
